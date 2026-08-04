@@ -46,6 +46,7 @@ type SyncBanner = {
   issuesCreated?: number;
   fuelEntriesCreated?: number;
   vehiclesMatched?: number;
+  vehiclesImported?: number;
   vehiclesUnmatched?: number;
   connectedVehiclesSeen?: number;
 };
@@ -67,8 +68,8 @@ function bannerText(b: SyncBanner): string {
   if (b.vehiclesMatched != null)
     parts.push(
       `${b.vehiclesMatched} vehicles matched by VIN${
-        b.vehiclesUnmatched ? ` (${b.vehiclesUnmatched} unmatched)` : ""
-      }`
+        b.vehiclesImported ? `, ${b.vehiclesImported} imported` : ""
+      }${b.vehiclesUnmatched ? ` (${b.vehiclesUnmatched} unmatched)` : ""}`
     );
   if (b.fuelEntriesCreated != null) parts.push(`${b.fuelEntriesCreated} fuel entries`);
   if (b.metersCreated != null) parts.push(`${b.metersCreated} meter entries`);

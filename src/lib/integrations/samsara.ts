@@ -20,7 +20,7 @@ const BASES: Record<string, string> = {
   eu: "https://api.eu.samsara.com",
 };
 
-export type SamsaraConfig = { token?: string; region?: string };
+export type SamsaraConfig = { token?: string; region?: string; importVehicles?: boolean };
 
 export function samsaraBase(region: string | undefined): string {
   return BASES[region ?? "us"] ?? BASES.us;
@@ -111,6 +111,7 @@ export async function testSamsaraConnection(
 
 export type SamsaraSyncSummary = {
   vehiclesMatched: number;
+  vehiclesImported: number;
   vehiclesUnmatched: number;
   metersCreated: number;
   faultsCreated: number;
@@ -193,14 +194,41 @@ export async function runSamsaraSync(connectionId: string): Promise<SamsaraSyncS
   );
   const byName = new Map(local.map((v) => [v.name.trim().toLowerCase(), v]));
 
+  // importVehicles (default true): Samsara vehicles with no VIN/name match are
+  // created as new AIlFleet vehicles, so a fresh workspace fills itself from
+  // the real fleet on first sync.
+  const importVehicles = config.importVehicles !== false;
+
   const matches: { samsaraId: string; vehicleId: string }[] = [];
   let unmatched = 0;
+  let imported = 0;
   for (const rv of remote) {
     const vehicle =
       (rv.vin ? byVin.get(rv.vin.trim().toUpperCase()) : undefined) ??
       (rv.name ? byName.get(rv.name.trim().toLowerCase()) : undefined);
     if (vehicle) {
       matches.push({ samsaraId: rv.id, vehicleId: vehicle.id });
+    } else if (importVehicles && (rv.vin || rv.name)) {
+      const year = rv.year ? parseInt(rv.year, 10) : null;
+      const created = await db.vehicle.create({
+        data: {
+          name: rv.name || rv.vin || `Samsara ${rv.id}`,
+          assetType: "vehicle",
+          vin: rv.vin?.trim().toUpperCase() || null,
+          licensePlate: rv.licensePlate || null,
+          make: rv.make || null,
+          model: rv.model || null,
+          year: year && Number.isFinite(year) ? year : null,
+          status: "active",
+          ownership: "owned",
+          meterUnit: "mi",
+          fuelType: "diesel",
+          customFields: JSON.stringify({ samsaraId: rv.id, importedFrom: "samsara" }),
+        },
+      });
+      local.push(created);
+      matches.push({ samsaraId: rv.id, vehicleId: created.id });
+      imported++;
     } else {
       unmatched++;
     }
@@ -227,7 +255,8 @@ export async function runSamsaraSync(connectionId: string): Promise<SamsaraSyncS
 
   // 2. Pull current stats for matched vehicles.
   const summary: SamsaraSyncSummary = {
-    vehiclesMatched: matches.length,
+    vehiclesMatched: matches.length - imported,
+    vehiclesImported: imported,
     vehiclesUnmatched: unmatched,
     metersCreated: 0,
     faultsCreated: 0,
