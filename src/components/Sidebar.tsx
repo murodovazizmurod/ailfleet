@@ -4,6 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
   LayoutDashboard,
+  Map,
   Truck,
   AlertTriangle,
   ClipboardCheck,
@@ -22,6 +23,7 @@ import {
 
 const NAV = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
+  { href: "/map", label: "Live Map", icon: Map },
   { href: "/vehicles", label: "Vehicles", icon: Truck },
   { href: "/issues", label: "Issues", icon: AlertTriangle },
   { href: "/inspections", label: "Inspections", icon: ClipboardCheck },

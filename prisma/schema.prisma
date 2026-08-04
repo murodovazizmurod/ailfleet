@@ -103,6 +103,7 @@ model Vehicle {
   archived        Boolean  @default(false)
   assignments     VehicleAssignment[]
   meterEntries    MeterEntry[]
+  locationEntries LocationEntry[]
   issues          Issue[]
   inspections     InspectionSubmission[]
   serviceReminders ServiceReminder[]
@@ -127,6 +128,21 @@ model VehicleAssignment {
   startedAt DateTime  @default(now())
   endedAt   DateTime?
   current   Boolean   @default(true)
+}
+
+model LocationEntry {
+  id        String   @id @default(cuid())
+  vehicle   Vehicle  @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
+  vehicleId String
+  latitude  Float
+  longitude Float
+  speedMph  Float?
+  heading   Float?
+  address   String?
+  date      DateTime @default(now())
+  source    String   @default("telematics")
+
+  @@index([vehicleId, date])
 }
 
 model MeterEntry {

@@ -66,6 +66,7 @@ type SamsaraVehicle = {
   make?: string;
   model?: string;
   year?: string;
+  staticAssignedDriver?: { id: string; name: string };
 };
 
 type Paginated = {
@@ -114,6 +115,8 @@ export type SamsaraSyncSummary = {
   vehiclesImported: number;
   vehiclesUnmatched: number;
   metersCreated: number;
+  locationsCreated: number;
+  driversLinked: number;
   faultsCreated: number;
   issuesCreated: number;
 };
@@ -259,15 +262,63 @@ export async function runSamsaraSync(connectionId: string): Promise<SamsaraSyncS
     vehiclesImported: imported,
     vehiclesUnmatched: unmatched,
     metersCreated: 0,
+    locationsCreated: 0,
+    driversLinked: 0,
     faultsCreated: 0,
     issuesCreated: 0,
   };
 
+  // Assigned drivers → contacts + vehicle assignments (create driver contacts
+  // by name when missing; keep the current assignment in step with Samsara).
+  const remoteById = new Map(remote.map((rv) => [rv.id, rv]));
+  for (const m of matches) {
+    const rv = remoteById.get(m.samsaraId);
+    const driverName = rv?.staticAssignedDriver?.name?.trim();
+    if (!driverName) continue;
+    const [firstName, ...rest] = driverName.split(/\s+/);
+    const lastName = rest.join(" ") || "—";
+    let contact = await db.contact.findFirst({
+      where: { firstName, lastName, archived: false },
+    });
+    if (!contact) {
+      contact = await db.contact.create({
+        data: { firstName, lastName, jobTitle: "Driver", isOperator: true },
+      });
+    }
+    const current = await db.vehicleAssignment.findFirst({
+      where: { vehicleId: m.vehicleId, current: true },
+    });
+    if (current?.contactId !== contact.id) {
+      if (current) {
+        await db.vehicleAssignment.update({
+          where: { id: current.id },
+          data: { current: false, endedAt: new Date() },
+        });
+      }
+      await db.vehicleAssignment.create({
+        data: { vehicleId: m.vehicleId, contactId: contact.id },
+      });
+      summary.driversLinked++;
+    }
+  }
+
   if (matches.length > 0) {
-    const stats = (await listAll(token, base, "/fleet/vehicles/stats", {
-      types: "obdOdometerMeters,gpsOdometerMeters,faultCodes",
-    })) as Record<string, unknown>[];
-    const statsById = new Map(stats.map((s) => [String(s.id), s]));
+    // Samsara restricts /stats to 4 types per request — fetch in two batches
+    // and merge per vehicle id.
+    const [statsA, statsB] = await Promise.all([
+      listAll(token, base, "/fleet/vehicles/stats", {
+        types: "obdOdometerMeters,gpsOdometerMeters,faultCodes,gps",
+      }) as Promise<Record<string, unknown>[]>,
+      listAll(token, base, "/fleet/vehicles/stats", {
+        types: "engineStates,fuelPercents",
+      }) as Promise<Record<string, unknown>[]>,
+    ]);
+    const statsById = new Map(statsA.map((s) => [String(s.id), s]));
+    for (const s of statsB) {
+      const existing = statsById.get(String(s.id));
+      if (existing) Object.assign(existing, s);
+      else statsById.set(String(s.id), s);
+    }
     const now = new Date();
 
     for (const m of matches) {
@@ -295,6 +346,61 @@ export async function runSamsaraSync(connectionId: string): Promise<SamsaraSyncS
             summary.metersCreated++;
           }
         }
+      }
+
+      // GPS → LocationEntry (skip if unchanged since the last stored point)
+      const gpsStat = s.gps as
+        | {
+            latitude?: number;
+            longitude?: number;
+            speedMilesPerHour?: number;
+            headingDegrees?: number;
+            reverseGeo?: { formattedLocation?: string };
+            time?: string;
+          }
+        | undefined;
+      if (gpsStat?.latitude != null && gpsStat.longitude != null) {
+        const at = gpsStat.time ? new Date(gpsStat.time) : now;
+        const last = await db.locationEntry.findFirst({
+          where: { vehicleId: vehicle.id },
+          orderBy: { date: "desc" },
+        });
+        if (!last || last.date.getTime() !== at.getTime()) {
+          await db.locationEntry.create({
+            data: {
+              vehicleId: vehicle.id,
+              latitude: gpsStat.latitude,
+              longitude: gpsStat.longitude,
+              speedMph: gpsStat.speedMilesPerHour ?? null,
+              heading: gpsStat.headingDegrees ?? null,
+              address: gpsStat.reverseGeo?.formattedLocation ?? null,
+              date: at,
+              source: "samsara",
+            },
+          });
+          summary.locationsCreated++;
+        }
+      }
+
+      // Engine state + fuel level → telemetry snapshot on the vehicle
+      const engine = s.engineStates as { value?: string } | undefined;
+      const fuel = s.fuelPercents as { value?: number } | undefined;
+      if (engine?.value != null || fuel?.value != null) {
+        let custom: Record<string, unknown> = {};
+        try {
+          custom = vehicle.customFields ? JSON.parse(vehicle.customFields) : {};
+        } catch {
+          /* rewrite corrupt blob */
+        }
+        custom.telemetry = {
+          engineState: engine?.value ?? null,
+          fuelPercent: fuel?.value ?? null,
+          updatedAt: now.toISOString(),
+        };
+        await db.vehicle.update({
+          where: { id: vehicle.id },
+          data: { customFields: JSON.stringify(custom) },
+        });
       }
 
       // Fault codes → FaultCode rows (+ Issue for high severity)

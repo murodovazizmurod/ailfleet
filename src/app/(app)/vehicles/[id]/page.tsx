@@ -163,6 +163,17 @@ async function OverviewTab({ vehicle }: { vehicle: VehicleWithAssignments }) {
 
   const current = vehicle.assignments.find((a) => a.current);
 
+  const lastLocation = await db.locationEntry.findFirst({
+    where: { vehicleId: vehicle.id },
+    orderBy: { date: "desc" },
+  });
+  let telemetry: { engineState?: string | null; fuelPercent?: number | null } = {};
+  try {
+    telemetry = vehicle.customFields ? (JSON.parse(vehicle.customFields).telemetry ?? {}) : {};
+  } catch {
+    telemetry = {};
+  }
+
   return (
     <div className="grid gap-4 lg:grid-cols-3">
       <div className="space-y-4 lg:col-span-2">
@@ -237,6 +248,29 @@ async function OverviewTab({ vehicle }: { vehicle: VehicleWithAssignments }) {
       </div>
 
       <div className="space-y-4">
+        {lastLocation ? (
+          <Card title="Last Location">
+            <p className="text-sm text-slate-700">{lastLocation.address ?? `${lastLocation.latitude.toFixed(4)}, ${lastLocation.longitude.toFixed(4)}`}</p>
+            <dl className="mt-2 divide-y divide-slate-50">
+              {lastLocation.speedMph != null ? (
+                <FieldRow label="Speed" value={`${Math.round(lastLocation.speedMph)} mph`} />
+              ) : null}
+              {telemetry.engineState ? (
+                <FieldRow label="Engine" value={telemetry.engineState} />
+              ) : null}
+              {telemetry.fuelPercent != null ? (
+                <FieldRow label="Fuel level" value={`${telemetry.fuelPercent}%`} />
+              ) : null}
+              <FieldRow label="Updated" value={shortDate(lastLocation.date)} />
+            </dl>
+            <p className="mt-3 border-t border-slate-100 pt-3 text-xs">
+              <Link href={`/map?focus=${vehicle.id}`} className="text-indigo-600 hover:underline">
+                Show on live map →
+              </Link>
+            </p>
+          </Card>
+        ) : null}
+
         <Card title="Assignment">
           {current ? (
             <div>
