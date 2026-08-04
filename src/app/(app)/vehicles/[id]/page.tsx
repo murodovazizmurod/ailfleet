@@ -26,6 +26,7 @@ import {
 } from "@/lib/enums";
 import { money, num, meter, shortDate, dateTime, vehicleTitle, daysUntil } from "@/lib/format";
 import { deriveRenewalStatus } from "@/app/(app)/renewals/status";
+import { TrackMap } from "./TrackMap";
 import {
   addMeterEntry,
   assignOperator,
@@ -167,6 +168,15 @@ async function OverviewTab({ vehicle }: { vehicle: VehicleWithAssignments }) {
     where: { vehicleId: vehicle.id },
     orderBy: { date: "desc" },
   });
+  const trail = (
+    await db.locationEntry.findMany({
+      where: { vehicleId: vehicle.id },
+      orderBy: { date: "desc" },
+      take: 50,
+    })
+  )
+    .reverse()
+    .map((p) => ({ lat: p.latitude, lng: p.longitude, date: p.date.toISOString() }));
   let telemetry: { engineState?: string | null; fuelPercent?: number | null } = {};
   try {
     telemetry = vehicle.customFields ? (JSON.parse(vehicle.customFields).telemetry ?? {}) : {};
@@ -177,6 +187,22 @@ async function OverviewTab({ vehicle }: { vehicle: VehicleWithAssignments }) {
   return (
     <div className="grid gap-4 lg:grid-cols-3">
       <div className="space-y-4 lg:col-span-2">
+        {trail.length > 0 ? (
+          <Card
+            title="Live Tracking"
+            actions={
+              <Link
+                href={`/map?focus=${vehicle.id}`}
+                className="text-xs font-medium text-indigo-600 hover:underline"
+              >
+                Fleet map →
+              </Link>
+            }
+          >
+            <TrackMap vehicleId={vehicle.id} vehicleName={vehicle.name} initialTrail={trail} />
+          </Card>
+        ) : null}
+
         <Card title="Details">
           <dl className="divide-y divide-slate-50">
             <FieldRow label="Type" value={enumLabel(ASSET_TYPE, vehicle.assetType)} />

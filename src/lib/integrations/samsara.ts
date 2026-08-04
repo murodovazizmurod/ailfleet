@@ -176,6 +176,125 @@ function extractFaults(stats: Record<string, unknown>): FaultRecord[] {
   return out;
 }
 
+export type LiveVehicleData = {
+  latitude: number;
+  longitude: number;
+  speedMph: number | null;
+  heading: number | null;
+  address: string | null;
+  engineState: string | null;
+  fuelPercent: number | null;
+  updatedAt: string;
+  live: boolean; // true = fresh from Samsara, false = last stored point
+};
+
+/**
+ * Real-time position for ONE vehicle, fetched straight from Samsara
+ * (stats filtered by vehicleIds — a single cheap call, safe to poll).
+ * Persists a LocationEntry when the position timestamp is new and falls
+ * back to the last stored point when there's no token / device link.
+ */
+export async function fetchLiveVehicleData(vehicleId: string): Promise<LiveVehicleData | null> {
+  const vehicle = await db.vehicle.findUnique({ where: { id: vehicleId } });
+  if (!vehicle) return null;
+
+  const fallback = async (): Promise<LiveVehicleData | null> => {
+    const last = await db.locationEntry.findFirst({
+      where: { vehicleId },
+      orderBy: { date: "desc" },
+    });
+    if (!last) return null;
+    let telemetry: { engineState?: string | null; fuelPercent?: number | null } = {};
+    try {
+      telemetry = vehicle.customFields
+        ? (JSON.parse(vehicle.customFields).telemetry ?? {})
+        : {};
+    } catch {
+      /* ignore */
+    }
+    return {
+      latitude: last.latitude,
+      longitude: last.longitude,
+      speedMph: last.speedMph,
+      heading: last.heading,
+      address: last.address,
+      engineState: telemetry.engineState ?? null,
+      fuelPercent: telemetry.fuelPercent ?? null,
+      updatedAt: last.date.toISOString(),
+      live: false,
+    };
+  };
+
+  let samsaraId: string | null = null;
+  try {
+    samsaraId = vehicle.customFields ? (JSON.parse(vehicle.customFields).samsaraId ?? null) : null;
+  } catch {
+    samsaraId = null;
+  }
+  const connection = await db.integrationConnection.findFirst({
+    where: { provider: "samsara", status: "connected" },
+  });
+  const config = readSamsaraConfig(connection?.config ?? null);
+  const token = resolveSamsaraToken(config);
+  if (!samsaraId || !token) return fallback();
+
+  try {
+    const res = (await samsaraGet(token, samsaraBase(config.region), "/fleet/vehicles/stats", {
+      types: "gps,engineStates,fuelPercents",
+      vehicleIds: samsaraId,
+    })) as Paginated;
+    const s = (res.data?.[0] ?? null) as Record<string, unknown> | null;
+    const gps = s?.gps as
+      | {
+          latitude?: number;
+          longitude?: number;
+          speedMilesPerHour?: number;
+          headingDegrees?: number;
+          reverseGeo?: { formattedLocation?: string };
+          time?: string;
+        }
+      | undefined;
+    if (!gps || gps.latitude == null || gps.longitude == null) return fallback();
+
+    const engine = (s?.engineStates as { value?: string } | undefined)?.value ?? null;
+    const fuel = (s?.fuelPercents as { value?: number } | undefined)?.value ?? null;
+    const at = gps.time ? new Date(gps.time) : new Date();
+
+    const last = await db.locationEntry.findFirst({
+      where: { vehicleId },
+      orderBy: { date: "desc" },
+    });
+    if (!last || last.date.getTime() !== at.getTime()) {
+      await db.locationEntry.create({
+        data: {
+          vehicleId,
+          latitude: gps.latitude,
+          longitude: gps.longitude,
+          speedMph: gps.speedMilesPerHour ?? null,
+          heading: gps.headingDegrees ?? null,
+          address: gps.reverseGeo?.formattedLocation ?? null,
+          date: at,
+          source: "samsara",
+        },
+      });
+    }
+
+    return {
+      latitude: gps.latitude,
+      longitude: gps.longitude,
+      speedMph: gps.speedMilesPerHour ?? null,
+      heading: gps.headingDegrees ?? null,
+      address: gps.reverseGeo?.formattedLocation ?? null,
+      engineState: engine,
+      fuelPercent: fuel,
+      updatedAt: at.toISOString(),
+      live: true,
+    };
+  } catch {
+    return fallback();
+  }
+}
+
 export async function runSamsaraSync(connectionId: string): Promise<SamsaraSyncSummary> {
   const connection = await db.integrationConnection.findUniqueOrThrow({
     where: { id: connectionId },
