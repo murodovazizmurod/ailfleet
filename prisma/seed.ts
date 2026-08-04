@@ -8,6 +8,19 @@ const daysAgo = (n: number) => new Date(now.getTime() - n * 86400000);
 const daysAhead = (n: number) => new Date(now.getTime() + n * 86400000);
 
 async function main() {
+  // Guard: this script WIPES the database. Refuse when real integration data
+  // is present (e.g. a connected Samsara org) unless explicitly forced.
+  const realConnection = await db.integrationConnection.findFirst({
+    where: { status: "connected", config: { not: null } },
+  });
+  if (realConnection && process.env.FORCE_SEED !== "1") {
+    console.error(
+      `Refusing to seed: a configured "${realConnection.provider}" integration exists — ` +
+        "this database holds real fleet data. Set FORCE_SEED=1 to override."
+    );
+    process.exit(1);
+  }
+
   console.log("Seeding AIlFleet…");
 
   // wipe (order matters for FK constraints)
