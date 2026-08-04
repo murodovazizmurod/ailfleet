@@ -1,0 +1,648 @@
+// AIlFleet data model
+// SQLite doesn't support Prisma enums — enum-like fields are Strings,
+// validated with Zod constants in src/lib/enums.ts
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = "file:./dev.db"
+}
+
+// ── Auth & people ────────────────────────────────────────────────
+
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  passwordHash String
+  role         String   @default("operator") // admin | manager | technician | operator
+  contact      Contact? @relation(fields: [contactId], references: [id])
+  contactId    String?  @unique
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+}
+
+model Contact {
+  id                String    @id @default(cuid())
+  firstName         String
+  lastName          String
+  email             String?
+  phone             String?
+  jobTitle          String?
+  employeeNumber    String?
+  isOperator        Boolean   @default(true)
+  isTechnician      Boolean   @default(false)
+  licenseNumber     String?
+  licenseClass      String?
+  licenseState      String?
+  hireDate          DateTime?
+  birthDate         DateTime?
+  address           String?
+  photoUrl          String?
+  archived          Boolean   @default(false)
+  user              User?
+  assignments       VehicleAssignment[]
+  reportedIssues    Issue[]             @relation("IssueReporter")
+  assignedIssues    Issue[]             @relation("IssueAssignee")
+  inspections       InspectionSubmission[]
+  workOrdersAssigned WorkOrder[]        @relation("WorkOrderTechnician")
+  fuelEntries       FuelEntry[]
+  renewals          ContactRenewal[]
+  laborLines        WorkOrderLabor[]
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+}
+
+// ── Vehicles & assets ────────────────────────────────────────────
+
+model VehicleGroup {
+  id       String    @id @default(cuid())
+  name     String    @unique
+  parentId String?
+  parent   VehicleGroup?  @relation("GroupTree", fields: [parentId], references: [id])
+  children VehicleGroup[] @relation("GroupTree")
+  vehicles Vehicle[]
+}
+
+model Vehicle {
+  id              String   @id @default(cuid())
+  name            String
+  assetType       String   @default("vehicle") // vehicle | equipment | trailer
+  vin             String?
+  licensePlate    String?
+  year            Int?
+  make            String?
+  model           String?
+  trim            String?
+  status          String   @default("active") // active | inactive | in_shop | out_of_service | sold
+  ownership       String   @default("owned")  // owned | leased | rented
+  fuelType        String?  // gasoline | diesel | electric | hybrid | cng | propane
+  meterUnit       String   @default("mi")     // mi | km | hr
+  currentMeter    Float    @default(0)
+  secondaryMeter  Float?
+  color           String?
+  bodyType        String?
+  photoUrl        String?
+  group           VehicleGroup? @relation(fields: [groupId], references: [id])
+  groupId         String?
+  // financials
+  purchaseDate    DateTime?
+  purchasePrice   Float?
+  purchaseVendor  String?
+  residualValue   Float?
+  usefulLifeYears Int?
+  loanLender      String?
+  loanAmount      Float?
+  loanPayment     Float?
+  leaseEndDate    DateTime?
+  // specs (free-form)
+  specs           String?  // JSON blob
+  customFields    String?  // JSON blob
+  archived        Boolean  @default(false)
+  assignments     VehicleAssignment[]
+  meterEntries    MeterEntry[]
+  issues          Issue[]
+  inspections     InspectionSubmission[]
+  serviceReminders ServiceReminder[]
+  workOrders      WorkOrder[]
+  serviceEntries  ServiceEntry[]
+  fuelEntries     FuelEntry[]
+  chargingEntries ChargingEntry[]
+  expenses        ExpenseEntry[]
+  renewals        VehicleRenewal[]
+  faultCodes      FaultCode[]
+  programLinks    ServiceProgramVehicle[]
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
+
+model VehicleAssignment {
+  id        String    @id @default(cuid())
+  vehicle   Vehicle   @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
+  vehicleId String
+  contact   Contact   @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  contactId String
+  startedAt DateTime  @default(now())
+  endedAt   DateTime?
+  current   Boolean   @default(true)
+}
+
+model MeterEntry {
+  id        String   @id @default(cuid())
+  vehicle   Vehicle  @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
+  vehicleId String
+  value     Float
+  date      DateTime @default(now())
+  meterType String   @default("primary") // primary | secondary
+  source    String   @default("manual")  // manual | fuel_entry | work_order | inspection | telematics
+  void      Boolean  @default(false)
+}
+
+// ── Issues & fault codes ─────────────────────────────────────────
+
+model Issue {
+  id          String    @id @default(cuid())
+  number      Int       @unique // assigned sequentially in app code
+  vehicle     Vehicle   @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
+  vehicleId   String
+  summary     String
+  description String?
+  status      String    @default("open") // open | overdue | resolved | closed
+  priority    String    @default("none") // none | low | medium | high | critical
+  source      String    @default("manual") // manual | inspection | fault_code | telematics
+  reportedBy  Contact?  @relation("IssueReporter", fields: [reportedById], references: [id])
+  reportedById String?
+  assignedTo  Contact?  @relation("IssueAssignee", fields: [assignedToId], references: [id])
+  assignedToId String?
+  reportedAt  DateTime  @default(now())
+  dueDate     DateTime?
+  dueMeter    Float?
+  resolvedAt  DateTime?
+  resolvedNote String?
+  labels      String?   // JSON array
+  inspectionItemResult InspectionItemResult?
+  workOrder   WorkOrder? @relation(fields: [workOrderId], references: [id])
+  workOrderId String?
+  faultCode   FaultCode?
+  photos      String?   // JSON array of URLs
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+}
+
+model FaultCode {
+  id         String   @id @default(cuid())
+  vehicle    Vehicle  @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
+  vehicleId  String
+  code       String   // e.g. P0301
+  description String?
+  severity   String   @default("unknown") // low | medium | high | unknown
+  source     String   @default("telematics")
+  status     String   @default("open") // open | acknowledged | resolved
+  occurredAt DateTime @default(now())
+  issue      Issue?   @relation(fields: [issueId], references: [id])
+  issueId    String?  @unique
+}
+
+// ── Inspections ──────────────────────────────────────────────────
+
+model InspectionForm {
+  id          String   @id @default(cuid())
+  title       String
+  description String?
+  archived    Boolean  @default(false)
+  items       InspectionItem[]
+  submissions InspectionSubmission[]
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model InspectionItem {
+  id          String  @id @default(cuid())
+  form        InspectionForm @relation(fields: [formId], references: [id], onDelete: Cascade)
+  formId      String
+  position    Int
+  type        String  // pass_fail | meter | number | text | dropdown | date | photo | signature | section
+  label       String
+  instructions String?
+  required    Boolean @default(false)
+  requirePhotoOnFail   Boolean @default(false)
+  requireCommentOnFail Boolean @default(true)
+  options     String? // JSON array for dropdown
+  results     InspectionItemResult[]
+}
+
+model InspectionSubmission {
+  id          String   @id @default(cuid())
+  form        InspectionForm @relation(fields: [formId], references: [id])
+  formId      String
+  vehicle     Vehicle  @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
+  vehicleId   String
+  submittedBy Contact? @relation(fields: [submittedById], references: [id])
+  submittedById String?
+  startedAt   DateTime @default(now())
+  submittedAt DateTime?
+  durationSec Int?
+  failedCount Int      @default(0)
+  results     InspectionItemResult[]
+}
+
+model InspectionItemResult {
+  id           String  @id @default(cuid())
+  submission   InspectionSubmission @relation(fields: [submissionId], references: [id], onDelete: Cascade)
+  submissionId String
+  item         InspectionItem @relation(fields: [itemId], references: [id])
+  itemId       String
+  passed       Boolean?
+  value        String?
+  comment      String?
+  photoUrl     String?
+  issue        Issue?  @relation(fields: [issueId], references: [id])
+  issueId      String? @unique
+}
+
+// ── Maintenance ──────────────────────────────────────────────────
+
+model ServiceTask {
+  id          String   @id @default(cuid())
+  name        String   @unique
+  description String?
+  expectedLaborHours Float?
+  reminders   ServiceReminder[]
+  programTasks ServiceProgramTask[]
+  workOrderLines WorkOrderLine[]
+  serviceEntryLines ServiceEntryLine[]
+}
+
+model ServiceProgram {
+  id       String @id @default(cuid())
+  name     String @unique
+  tasks    ServiceProgramTask[]
+  vehicles ServiceProgramVehicle[]
+}
+
+model ServiceProgramTask {
+  id            String  @id @default(cuid())
+  program       ServiceProgram @relation(fields: [programId], references: [id], onDelete: Cascade)
+  programId     String
+  task          ServiceTask @relation(fields: [taskId], references: [id])
+  taskId        String
+  intervalMeter Float?  // every N miles/km/hours
+  intervalDays  Int?    // every N days
+  dueSoonMeter  Float?  // threshold
+  dueSoonDays   Int?
+}
+
+model ServiceProgramVehicle {
+  id        String @id @default(cuid())
+  program   ServiceProgram @relation(fields: [programId], references: [id], onDelete: Cascade)
+  programId String
+  vehicle   Vehicle @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
+  vehicleId String
+
+  @@unique([programId, vehicleId])
+}
+
+model ServiceReminder {
+  id           String    @id @default(cuid())
+  vehicle      Vehicle   @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
+  vehicleId    String
+  task         ServiceTask @relation(fields: [taskId], references: [id])
+  taskId       String
+  nextDueDate  DateTime?
+  nextDueMeter Float?
+  intervalDays Int?
+  intervalMeter Float?
+  status       String    @default("upcoming") // upcoming | due_soon | overdue | snoozed
+  lastCompletedAt DateTime?
+  lastCompletedMeter Float?
+}
+
+model WorkOrder {
+  id          String    @id @default(cuid())
+  number      Int       @unique // assigned sequentially in app code
+  vehicle     Vehicle   @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
+  vehicleId   String
+  status      String    @default("open") // open | pending | in_progress | waiting_on_parts | completed | closed
+  priority    String    @default("none")
+  repairClass String    @default("scheduled") // scheduled | non_scheduled | emergency
+  issuedAt    DateTime  @default(now())
+  scheduledFor DateTime?
+  startedAt   DateTime?
+  completedAt DateTime?
+  assignedTo  Contact?  @relation("WorkOrderTechnician", fields: [assignedToId], references: [id])
+  assignedToId String?
+  vendor      Vendor?   @relation(fields: [vendorId], references: [id])
+  vendorId    String?
+  meterAtService Float?
+  description String?
+  laborTotal  Float     @default(0)
+  partsTotal  Float     @default(0)
+  subtotal    Float     @default(0)
+  tax         Float     @default(0)
+  total       Float     @default(0)
+  issues      Issue[]
+  lines       WorkOrderLine[]
+  serviceEntry ServiceEntry?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+}
+
+model WorkOrderLine {
+  id          String   @id @default(cuid())
+  workOrder   WorkOrder @relation(fields: [workOrderId], references: [id], onDelete: Cascade)
+  workOrderId String
+  task        ServiceTask? @relation(fields: [taskId], references: [id])
+  taskId      String?
+  description String?
+  laborLines  WorkOrderLabor[]
+  partLines   WorkOrderPart[]
+  laborCost   Float    @default(0)
+  partsCost   Float    @default(0)
+  subtotal    Float    @default(0)
+}
+
+model WorkOrderLabor {
+  id        String  @id @default(cuid())
+  line      WorkOrderLine @relation(fields: [lineId], references: [id], onDelete: Cascade)
+  lineId    String
+  technician Contact? @relation(fields: [technicianId], references: [id])
+  technicianId String?
+  hours     Float   @default(0)
+  rate      Float   @default(0)
+  cost      Float   @default(0)
+}
+
+model WorkOrderPart {
+  id       String @id @default(cuid())
+  line     WorkOrderLine @relation(fields: [lineId], references: [id], onDelete: Cascade)
+  lineId   String
+  part     Part   @relation(fields: [partId], references: [id])
+  partId   String
+  quantity Float  @default(1)
+  unitCost Float  @default(0)
+  cost     Float  @default(0)
+}
+
+model ServiceEntry {
+  id          String    @id @default(cuid())
+  vehicle     Vehicle   @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
+  vehicleId   String
+  workOrder   WorkOrder? @relation(fields: [workOrderId], references: [id])
+  workOrderId String?   @unique
+  date        DateTime  @default(now())
+  meter       Float?
+  vendor      Vendor?   @relation(fields: [vendorId], references: [id])
+  vendorId    String?
+  reference   String?
+  notes       String?
+  laborTotal  Float     @default(0)
+  partsTotal  Float     @default(0)
+  total       Float     @default(0)
+  lines       ServiceEntryLine[]
+  createdAt   DateTime  @default(now())
+}
+
+model ServiceEntryLine {
+  id      String @id @default(cuid())
+  entry   ServiceEntry @relation(fields: [entryId], references: [id], onDelete: Cascade)
+  entryId String
+  task    ServiceTask? @relation(fields: [taskId], references: [id])
+  taskId  String?
+  description String?
+  cost    Float  @default(0)
+}
+
+// ── Parts & inventory ────────────────────────────────────────────
+
+model Part {
+  id           String  @id @default(cuid())
+  number       String  @unique
+  description  String?
+  category     String?
+  manufacturer String?
+  manufacturerPartNumber String?
+  upc          String?
+  unitCost     Float   @default(0)
+  measurementUnit String @default("each")
+  photoUrl     String?
+  archived     Boolean @default(false)
+  stocks       PartStock[]
+  adjustments  PartAdjustment[]
+  workOrderParts WorkOrderPart[]
+  purchaseOrderLines PurchaseOrderLine[]
+}
+
+model InventoryLocation {
+  id     String @id @default(cuid())
+  name   String @unique
+  stocks PartStock[]
+}
+
+model PartStock {
+  id           String @id @default(cuid())
+  part         Part   @relation(fields: [partId], references: [id], onDelete: Cascade)
+  partId       String
+  location     InventoryLocation @relation(fields: [locationId], references: [id], onDelete: Cascade)
+  locationId   String
+  quantity     Float  @default(0)
+  reorderPoint Float?
+  aisle        String?
+  bin          String?
+
+  @@unique([partId, locationId])
+}
+
+model PartAdjustment {
+  id        String   @id @default(cuid())
+  part      Part     @relation(fields: [partId], references: [id], onDelete: Cascade)
+  partId    String
+  locationId String?
+  delta     Float
+  reason    String   // received | used | damaged | lost | correction | returned
+  note      String?
+  createdAt DateTime @default(now())
+}
+
+// ── Purchasing & vendors ─────────────────────────────────────────
+
+model Vendor {
+  id              String  @id @default(cuid())
+  name            String  @unique
+  classifications String? // JSON array: fuel | service | parts | vehicle
+  contactName     String?
+  phone           String?
+  email           String?
+  website         String?
+  address         String?
+  archived        Boolean @default(false)
+  workOrders      WorkOrder[]
+  serviceEntries  ServiceEntry[]
+  fuelEntries     FuelEntry[]
+  purchaseOrders  PurchaseOrder[]
+  expenses        ExpenseEntry[]
+}
+
+model PurchaseOrder {
+  id          String   @id @default(cuid())
+  number      Int      @unique // assigned sequentially in app code
+  vendor      Vendor   @relation(fields: [vendorId], references: [id])
+  vendorId    String
+  status      String   @default("draft") // draft | pending_approval | approved | rejected | purchased | received_partial | received_full | closed
+  description String?
+  createdAt   DateTime @default(now())
+  approvedAt  DateTime?
+  purchasedAt DateTime?
+  receivedAt  DateTime?
+  subtotal    Float    @default(0)
+  tax         Float    @default(0)
+  shipping    Float    @default(0)
+  total       Float    @default(0)
+  lines       PurchaseOrderLine[]
+}
+
+model PurchaseOrderLine {
+  id       String @id @default(cuid())
+  po       PurchaseOrder @relation(fields: [poId], references: [id], onDelete: Cascade)
+  poId     String
+  part     Part   @relation(fields: [partId], references: [id])
+  partId   String
+  quantity Float  @default(1)
+  unitCost Float  @default(0)
+  received Float  @default(0)
+}
+
+// ── Fuel, charging & expenses ────────────────────────────────────
+
+model FuelEntry {
+  id           String   @id @default(cuid())
+  vehicle      Vehicle  @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
+  vehicleId    String
+  date         DateTime @default(now())
+  vendor       Vendor?  @relation(fields: [vendorId], references: [id])
+  vendorId     String?
+  enteredBy    Contact? @relation(fields: [enteredById], references: [id])
+  enteredById  String?
+  meter        Float?
+  volume       Float    // gallons or liters
+  pricePerUnit Float    @default(0)
+  total        Float    @default(0)
+  partial      Boolean  @default(false)
+  personal     Boolean  @default(false)
+  reference    String?
+  source       String   @default("manual") // manual | fuel_card
+  fuelEconomy  Float?   // computed MPG / km-per-L vs previous entry
+  flagged      Boolean  @default(false)
+  flagReason   String?
+}
+
+model ChargingEntry {
+  id          String   @id @default(cuid())
+  vehicle     Vehicle  @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
+  vehicleId   String
+  date        DateTime @default(now())
+  meter       Float?
+  energyKwh   Float
+  durationMin Int?
+  cost        Float    @default(0)
+  location    String?
+  source      String   @default("manual")
+}
+
+model ExpenseEntry {
+  id        String   @id @default(cuid())
+  vehicle   Vehicle  @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
+  vehicleId String
+  type      String   // insurance | registration | tolls | washing | parking | fines | depreciation | other
+  amount    Float
+  date      DateTime @default(now())
+  vendor    Vendor?  @relation(fields: [vendorId], references: [id])
+  vendorId  String?
+  notes     String?
+  recurring Boolean  @default(false)
+  frequency String?  // monthly | quarterly | yearly
+}
+
+// ── Renewals ─────────────────────────────────────────────────────
+
+model VehicleRenewal {
+  id        String   @id @default(cuid())
+  vehicle   Vehicle  @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
+  vehicleId String
+  type      String   // registration | insurance | emission_test | dot_inspection | custom
+  name      String?
+  dueDate   DateTime
+  dueSoonDays Int    @default(30)
+  status    String   @default("upcoming") // upcoming | due_soon | overdue | completed
+  completedAt DateTime?
+  notes     String?
+}
+
+model ContactRenewal {
+  id        String   @id @default(cuid())
+  contact   Contact  @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  contactId String
+  type      String   // license | certification | medical_exam | training | custom
+  name      String?
+  dueDate   DateTime
+  dueSoonDays Int    @default(30)
+  status    String   @default("upcoming")
+  completedAt DateTime?
+}
+
+// ── Collaboration ────────────────────────────────────────────────
+
+model Comment {
+  id         String   @id @default(cuid())
+  entityType String   // vehicle | issue | work_order | fuel_entry | service_entry | part | purchase_order | contact
+  entityId   String
+  authorName String
+  body       String
+  createdAt  DateTime @default(now())
+
+  @@index([entityType, entityId])
+}
+
+model Document {
+  id         String   @id @default(cuid())
+  entityType String
+  entityId   String
+  name       String
+  url        String
+  sizeBytes  Int?
+  createdAt  DateTime @default(now())
+
+  @@index([entityType, entityId])
+}
+
+// ── Integrations & platform ──────────────────────────────────────
+
+model IntegrationConnection {
+  id        String   @id @default(cuid())
+  kind      String   // telematics | fuel_card | accounting | sso
+  provider  String   // geotab | samsara | verizon_connect | wex | fuelman | quickbooks | ...
+  status    String   @default("disconnected") // connected | disconnected | error | syncing
+  config    String?  // JSON: credentials refs, sync options
+  lastSyncAt DateTime?
+  lastError  String?
+  createdAt DateTime @default(now())
+}
+
+model ApiToken {
+  id        String   @id @default(cuid())
+  name      String
+  tokenHash String   @unique
+  prefix    String
+  scopes    String?  // JSON array
+  lastUsedAt DateTime?
+  createdAt DateTime @default(now())
+  revokedAt DateTime?
+}
+
+model Webhook {
+  id        String   @id @default(cuid())
+  url       String
+  secret    String
+  events    String   // JSON array: vehicle.created, issue.created, work_order.completed, ...
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  deliveries WebhookDelivery[]
+}
+
+model WebhookDelivery {
+  id         String   @id @default(cuid())
+  webhook    Webhook  @relation(fields: [webhookId], references: [id], onDelete: Cascade)
+  webhookId  String
+  event      String
+  payload    String
+  statusCode Int?
+  success    Boolean  @default(false)
+  attempts   Int      @default(1)
+  createdAt  DateTime @default(now())
+}
+
+model AccountSetting {
+  key   String @id
+  value String
+}
