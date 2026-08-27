@@ -47,3 +47,6 @@ prisma/dev.db-journal
 # env
 .env
 .env.*
+
+# runtime file uploads (invoices, receipts)
+/uploads

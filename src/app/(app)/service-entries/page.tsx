@@ -41,7 +41,11 @@ export default async function ServiceEntriesPage() {
               .filter(Boolean) as string[];
             return (
               <tr key={e.id} className="hover:bg-slate-50">
-                <Td className="whitespace-nowrap">{shortDate(e.date)}</Td>
+                <Td className="whitespace-nowrap">
+                  <Link href={`/service-entries/${e.id}`} className="text-indigo-600 hover:underline">
+                    {shortDate(e.date)}
+                  </Link>
+                </Td>
                 <Td>
                   <Link
                     href={`/vehicles/${e.vehicleId}`}

@@ -393,6 +393,11 @@ model ServiceEntry {
   vendorId    String?
   reference   String?
   notes       String?
+  startDate   DateTime?
+  repairClass String?   // scheduled | non_scheduled | emergency
+  invoiceNumber String?
+  discount    Float     @default(0)
+  tax         Float     @default(0)
   laborTotal  Float     @default(0)
   partsTotal  Float     @default(0)
   total       Float     @default(0)
@@ -407,6 +412,8 @@ model ServiceEntryLine {
   task    ServiceTask? @relation(fields: [taskId], references: [id])
   taskId  String?
   description String?
+  laborCost Float @default(0)
+  partsCost Float @default(0)
   cost    Float  @default(0)
 }
 
