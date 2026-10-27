@@ -1,0 +1,12 @@
+node_modules
+.next
+.git
+.gstack
+uploads
+prisma/dev.db
+prisma/dev.db-journal
+.env
+.env.*
+*.tsbuildinfo
+data
+docs

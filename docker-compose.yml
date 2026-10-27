@@ -1,0 +1,19 @@
+# Production: `docker compose up -d --build`
+# Data lives in ./data (SQLite database + uploaded files); back that folder up.
+services:
+  web:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${WEB_PORT:-3070}:3000"
+    env_file:
+      - path: .env
+        required: false
+    volumes:
+      - ./data/prisma:/app/prisma
+      - ./data/uploads:/app/uploads
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:3000/dashboard"]
+      interval: 30s
+      timeout: 10s
+      retries: 5

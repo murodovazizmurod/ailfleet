@@ -50,3 +50,4 @@ prisma/dev.db-journal
 
 # runtime file uploads (invoices, receipts)
 /uploads
+.gstack/
